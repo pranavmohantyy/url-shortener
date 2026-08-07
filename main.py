@@ -1,8 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from sqlalchemy import create_engine, Column, String, Integer, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
+import random
+import string
 
 DATABASE_URL = "sqlite:///./test.db"
 
@@ -16,9 +18,16 @@ class Link(Base):
     original_url = Column(String, index=True)
     slug = Column(String, unique=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    expires_at = Column(DateTime)
-    click_count = Column(Integer, default=0)
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+
+@app.post("/shorten")
+async def shorten_url(original_url: str):
+    slug = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
+    db = SessionLocal()
+    db.add(Link(original_url=original_url, slug=slug))
+    db.commit()
+    db.refresh(link)
+    return {"short_url": f"http://short.url/{slug}"}
