@@ -17,17 +17,20 @@ class Link(Base):
     id = Column(Integer, primary_key=True, index=True)
     original_url = Column(String, index=True)
     slug = Column(String, unique=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    click_count = Column(Integer, default=0)
+    expiration_date = Column(DateTime)
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-@app.post("/shorten")
-async def shorten_url(original_url: str):
-    slug = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
+@app.get("/{slug}")
+async def redirect_to_url(slug: str):
     db = SessionLocal()
-    db.add(Link(original_url=original_url, slug=slug))
+    link = db.query(Link).filter(Link.slug == slug).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Link not found")
+    link.click_count += 1
     db.commit()
     db.refresh(link)
-    return {"short_url": f"http://short.url/{slug}"}
+    return {"redirect": link.original_url}
