@@ -1,1 +1,69 @@
-from fastapi import FastAPI, HTTPException, Body, Depends, Request\nfrom fastapi.middleware.cors import CORSMiddleware\nfrom fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware\nfrom sqlalchemy import create_engine, Column, String, Integer, DateTime, UniqueConstraint\nfrom sqlalchemy.ext.declarative import declarative_base\nfrom sqlalchemy.orm import sessionmaker\nfrom datetime import datetime, timedelta\nimport random\nimport string\nimport httpx\nfrom slowapi import Limiter\nfrom slowapi.util import get_remote_address\n\nDATABASE_URL = "sqlite:///./test.db"\n\nengine = create_engine(DATABASE_URL)\nSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)\nBase = declarative_base()\n\nlimiter = Limiter(key_func=get_remote_address)\n\nclass User(Base):\n    __tablename__ = 'users'\n    id = Column(Integer, primary_key=True, index=True)\n    api_key = Column(String, unique=True, index=True)\n\nclass Url(Base):\n    __tablename__ = 'urls'\n    id = Column(Integer, primary_key=True, index=True)\n    original_url = Column(String)\n    short_url = Column(String, unique=True)\n    created_at = Column(DateTime, default=datetime.utcnow)\n    expires_at = Column(DateTime)\n    __table_args__ = (UniqueConstraint('short_url', name='uq_short_url'),)\n\nBase.metadata.create_all(bind=engine)\n\napp = FastAPI()\n\napp.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])\napp.add_middleware(HTTPSRedirectMiddleware)\n\ndef get_db():\n    db = SessionLocal()\n    try:\n        yield db\n    finally:\n        db.close()\n\ndef generate_api_key():\n    return ''.join(random.choices(string.ascii_letters + string.digits, k=32))\n\n@app.post('/register')\ndef register_user(db: Session = Depends(get_db)):\n    api_key = generate_api_key()\n    new_user = User(api_key=api_key)\n    db.add(new_user)\n    db.commit()\n    db.refresh(new_user)\n    return {"api_key": new_user.api_key}\n\n@app.post('/shorten')\ndef shorten_url(original_url: str, api_key: str = Depends(get_api_key), db: Session = Depends(get_db)):\n    if not db.query(User).filter(User.api_key == api_key).first():\n        raise HTTPException(status_code=403, detail="Invalid API key")\n    short_url = ''.join(random.choices(string.ascii_letters + string.digits, k=6))\n    new_url = Url(original_url=original_url, short_url=short_url)\n    db.add(new_url)\n    db.commit()\n    db.refresh(new_url)\n    return {"short_url": new_url.short_url}\n\ndef get_api_key(x_api_key: str = Header(None)):\n    if not x_api_key:\n        raise HTTPException(status_code=403, detail="API key is required")\n    return x_api_key
+from fastapi import FastAPI, HTTPException, Body, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, UniqueConstraint
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from datetime import datetime, timedelta
+import random
+import string
+import httpx
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+DATABASE_URL = "sqlite:///./test.db"
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+app = FastAPI()
+
+app.add_middleware(CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_middleware(HTTPSRedirectMiddleware)
+
+limiter = Limiter(key_func=get_remote_address)
+
+class URLShortener(Base):
+    __tablename__ = "urls"
+    id = Column(Integer, primary_key=True, index=True)
+    original_url = Column(String, nullable=False)
+    short_slug = Column(String, unique=True, nullable=False)
+    expiration_date = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+Base.metadata.create_all(bind=engine)
+
+@app.post("/shorten")
+async def shorten_url(url: str = Body(...), slug: str = Body(None), expiration: str = Body(None)):
+    db = SessionLocal()
+    if slug is None:
+        slug = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
+    expiration_date = datetime.fromisoformat(expiration) if expiration else None
+    new_url = URLShortener(original_url=url, short_slug=slug, expiration_date=expiration_date)
+    db.add(new_url)
+    db.commit()
+    return {"shortened_url": f"http://localhost:8000/r/{slug}"}
+
+@app.get("/r/{slug}")
+async def redirect_to_url(slug: str):
+    db = SessionLocal()
+    url = db.query(URLShortener).filter(URLShortener.short_slug == slug).first()
+    if url:
+        if url.expiration_date and url.expiration_date < datetime.utcnow():
+            raise HTTPException(status_code=404, detail="URL expired")
+        return {"url": url.original_url}
+    raise HTTPException(status_code=404, detail="URL not found")
+
+@app.get("/analytics/{slug}")
+async def get_analytics(slug: str):
+    db = SessionLocal()
+    url = db.query(URLShortener).filter(URLShortener.short_slug == slug).first()
+    if url:
+        return {"original_url": url.original_url, "created_at": url.created_at}
+    raise HTTPException(status_code=404, detail="URL not found")
