@@ -1,1 +1,40 @@
-from fastapi import FastAPI, HTTPException, Body\nfrom sqlalchemy import create_engine, Column, String, Integer, DateTime, UniqueConstraint\nfrom sqlalchemy.ext.declarative import declarative_base\nfrom sqlalchemy.orm import sessionmaker\nfrom datetime import datetime, timedelta\nimport random\nimport string\n\nDATABASE_URL = "sqlite:///./test.db"\n\nengine = create_engine(DATABASE_URL)\nSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)\nBase = declarative_base()\n\nclass Link(Base):\n    __tablename__ = "links"\n    id = Column(Integer, primary_key=True, index=True)\n    original_url = Column(String, nullable=False)\n    short_url = Column(String, unique=True, nullable=False)\n    created_at = Column(DateTime, default=datetime.utcnow)\n    expires_at = Column(DateTime, nullable=True)\n    UniqueConstraint('original_url', 'short_url', name='unique_url')\n\nclass Click(Base):\n    __tablename__ = "clicks"\n    id = Column(Integer, primary_key=True, index=True)\n    link_id = Column(Integer, nullable=False)\n    clicked_at = Column(DateTime, default=datetime.utcnow)\n    user_agent = Column(String, nullable=True)\n    referer = Column(String, nullable=True)\n\nBase.metadata.create_all(bind=engine)\n\napp = FastAPI()
+from fastapi import FastAPI, HTTPException, Body
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, UniqueConstraint
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from datetime import datetime, timedelta
+import random
+import string
+
+DATABASE_URL = "sqlite:///./test.db"
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+class Link(Base):
+    __tablename__ = "links"
+    id = Column(Integer, primary_key=True, index=True)
+    slug = Column(String, unique=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime)
+    click_count = Column(Integer, default=0)
+    recent_clicks = Column(String)  # Store timestamps as comma-separated string
+
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI()
+
+@app.get("/{slug}/stats")
+async def get_link_stats(slug: str):
+    db = SessionLocal()
+    link = db.query(Link).filter(Link.slug == slug).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Link not found")
+    recent_clicks = link.recent_clicks.split(",") if link.recent_clicks else []
+    return {
+        "click_count": link.click_count,
+        "created_at": link.created_at,
+        "expires_at": link.expires_at,
+        "recent_clicks": recent_clicks
+    }
